@@ -14,19 +14,13 @@ TOTAL_USERS = 7000
 
 print("Inicjalizacja bazy 10 000 kart przy użyciu Faker...")
 
-# Generujemy stałą bazę użytkowników i przypisujemy im karty oraz domyślne lokalizacje
 users = [f"user_{i}" for i in range(1, TOTAL_USERS + 1)]
 cards_pool = []
 
 for i in range(1, TOTAL_CARDS + 1):
     assigned_user = random.choice(users)
-    # Wykorzystujemy Fakera do wylosowania punktu początkowego w Europie/Polsce
-    home_lat = float(fake.latitude()) if random.random() > 0.5 else random.uniform(49.0, 54.8)
-    home_lon = float(fake.longitude()) if random.random() > 0.5 else random.uniform(14.1, 24.1)
-    
-    # Pilnujemy, aby kordy były w okolicach Polski dla "normalnych" transakcji
-    if home_lat < 49.0 or home_lat > 54.8: home_lat = random.uniform(49.0, 54.8)
-    if home_lon < 14.1 or home_lon > 24.1: home_lon = random.uniform(14.1, 24.1)
+    home_lat = random.uniform(49.0, 54.8)
+    home_lon = random.uniform(14.1, 24.1)
 
     cards_pool.append({
         "card_id": f"card_{i}",
@@ -46,23 +40,19 @@ except Exception as e:
     exit(1)
 
 
-def generate_transaction(anomaly_type=None):
-    """Generuje pojedynczą transakcję - normalną lub anomalię."""
+def generate_transaction(anomaly_type="NORMAL"):
     card = random.choice(cards_pool)
     lat, lon = card["home_gps"]
     
-    # Normalne przesunięcie (zakupy lokalne)
     lat += random.uniform(-0.02, 0.02)
     lon += random.uniform(-0.02, 0.02)
     amount = round(random.uniform(10.0, 300.0), 2)
     
-    # Modyfikacja danych pod kątem anomalii
     if anomaly_type == "AMOUNT":
         amount = round(random.uniform(5000.0, 12000.0), 2)
         print(f"[ANOMALIA - KWOTA] Karta {card['card_id']} -> {amount} PLN")
         
     elif anomaly_type == "LOCATION":
-        # Używamy fakera, aby rzucić transakcję na drugi koniec świata (np. USA / Azja)
         lat = float(fake.latitude())
         lon = float(fake.longitude())
         print(f"[ANOMALIA - LOKALIZACJA] Karta {card['card_id']} nagle pojawiła się w: [{lat}, {lon}]")
@@ -75,7 +65,6 @@ def generate_transaction(anomaly_type=None):
         "card_limit": card["limit"],
         "timestamp": datetime.utcnow().isoformat()
     }
-    # print(payload);
     return payload, card["card_id"]
 
 

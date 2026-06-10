@@ -33,7 +33,6 @@ def haversine_distance(coord1, coord2):
 
 class FraudDetectorMap(MapFunction):
     def __init__(self):
-        # Pamięć stanowa Flinka przechowująca historię transakcji kart
         self.cards_cache = {}
 
     def map(self, value_str):
@@ -43,8 +42,6 @@ class FraudDetectorMap(MapFunction):
         current_amount = tx["amount"]
         current_time = datetime.fromisoformat(tx["timestamp"])
         
-        generator_tag = tx.get("anomaly_type", "NORMAL")
-        
         alert_triggered = None
 
         if card_id in self.cards_cache:
@@ -53,7 +50,7 @@ class FraudDetectorMap(MapFunction):
             prev_amount = last_tx["amount"]
             prev_time = datetime.fromisoformat(last_tx["timestamp"])
 
-            time_delta = (current_time - prev_time).total_seconds()  # Różnica w sekundach
+            time_delta = (current_time - prev_time).total_seconds()
             time_delta_hours = time_delta / 3600.0
 
             # LOKALIZACJA (Impossible Travel) ---
@@ -64,9 +61,10 @@ class FraudDetectorMap(MapFunction):
                     alert_triggered = {
                         "alert_type": "LOCATION_ANOMALY",
                         "card_id": card_id,
-                        "details": f"Nierealna prędkość: {round(speed, 2)} km/h. Generator otagował to jako: {generator_tag}",
+                        "details": f"Impossible Travel: {round(speed, 2)} km/h na dystansie {round(distance, 2)} km.",
                         "timestamp": tx["timestamp"],
-                        "amount": current_amount
+                        "amount": current_amount,
+                        "execution_engine": "Apache Flink"
                     }
 
             # KWOTA (Drastyczny skok wartości) ---
@@ -74,26 +72,27 @@ class FraudDetectorMap(MapFunction):
                 alert_triggered = {
                     "alert_type": "AMOUNT_ANOMALY",
                     "card_id": card_id,
-                    "details": f"Skok kwoty z {prev_amount} do {current_amount} PLN. Generator otagował to jako: {generator_tag}",
+                    "details": f"Gwałtowny skok wartości transakcji z {prev_amount} PLN do {current_amount} PLN.",
                     "timestamp": tx["timestamp"],
-                    "amount": current_amount
+                    "amount": current_amount,
+                    "execution_engine": "Apache Flink"
                 }
 
-            # CZĘSTOTLIWOŚĆ (Seria transakcji poniżej 5 sekund) ---
-            if time_delta > 0 and time_delta < 5:
+            # CZĘSTOTLIWOŚĆ (High Frequency) ---
+            if 0 < time_delta < 5:
                 alert_triggered = {
                     "alert_type": "FREQUENCY_ANOMALY",
                     "card_id": card_id,
-                    "details": f"Odstęp czasu: {round(time_delta, 2)} sek. Generator otagował to jako: {generator_tag}",
+                    "details": f"Podejrzana seria transakcji. Odstęp czasu: {round(time_delta, 2)} sek.",
                     "timestamp": tx["timestamp"],
-                    "amount": current_amount
+                    "amount": current_amount,
+                    "execution_engine": "Apache Flink"
                 }
 
-        # Zapisujemy obecną transakcję do stanu
         self.cards_cache[card_id] = tx
 
         if alert_triggered:
-            print(f"⚠️ [FLINK DETECTED]: {alert_triggered['alert_type']} na karcie {card_id} | {alert_triggered['details']}")
+            print(f"__ALERT_JSON__:{json.dumps(alert_triggered)}")
             return json.dumps(alert_triggered)
         
         return None
@@ -112,10 +111,13 @@ def run_flink_job():
         properties={'bootstrap.servers': 'localhost:9092', 'group.id': 'flink_fraud_detector_group'}
     )
     kafka_consumer.set_start_from_latest()
-    
     ds = env.add_source(kafka_consumer)
+    
     alerts_ds = ds.map(FraudDetectorMap()).filter(lambda value: value is not None)
     alerts_ds.print()
+    
+    print("[+] Silnik strumieniowy Apache Flink został pomyślnie zainicjalizowany.")
+    print("[*] Uruchamianie zadania 'Card Fraud Detection Job'...")
     
     env.execute("Card Fraud Detection Architecture")
 
