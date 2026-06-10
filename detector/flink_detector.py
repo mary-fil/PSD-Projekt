@@ -7,6 +7,7 @@ import json
 import math
 import urllib.request
 from datetime import datetime
+from kafka import KafkaProducer
 from pyflink.common import SimpleStringSchema
 from pyflink.datastream import StreamExecutionEnvironment
 from pyflink.datastream.connectors.kafka import FlinkKafkaConsumer
@@ -34,6 +35,17 @@ def haversine_distance(coord1, coord2):
 class FraudDetectorMap(MapFunction):
     def __init__(self):
         self.cards_cache = {}
+        self.producer = None
+
+    def open(self, runtime_context):
+        """
+        Metoda cyklu życia Flinka. Wykonuje się RAZ na workerze w momencie startu zadania.
+        Tutaj bezpiecznie otwieramy połączenie z Kafką.
+        """
+        self.producer = KafkaProducer(
+            bootstrap_servers='localhost:9092',
+            value_serializer=lambda v: json.dumps(v).encode('utf-8')
+        )
 
     def map(self, value_str):
         tx = json.loads(value_str)
@@ -53,7 +65,7 @@ class FraudDetectorMap(MapFunction):
             time_delta = (current_time - prev_time).total_seconds()
             time_delta_hours = time_delta / 3600.0
 
-            # LOKALIZACJA (Impossible Travel) ---
+            # LOKALIZACJA
             distance = haversine_distance(prev_gps, current_gps)
             if time_delta_hours > 0:
                 speed = distance / time_delta_hours
@@ -67,7 +79,7 @@ class FraudDetectorMap(MapFunction):
                         "execution_engine": "Apache Flink"
                     }
 
-            # KWOTA (Drastyczny skok wartości) ---
+            # KWOTA
             if current_amount > 500 and current_amount > (prev_amount * 4):
                 alert_triggered = {
                     "alert_type": "AMOUNT_ANOMALY",
@@ -78,7 +90,7 @@ class FraudDetectorMap(MapFunction):
                     "execution_engine": "Apache Flink"
                 }
 
-            # CZĘSTOTLIWOŚĆ (High Frequency) ---
+            # CZĘSTOTLIWOŚĆ
             if 0 < time_delta < 5:
                 alert_triggered = {
                     "alert_type": "FREQUENCY_ANOMALY",
@@ -91,8 +103,11 @@ class FraudDetectorMap(MapFunction):
 
         self.cards_cache[card_id] = tx
 
-        if alert_triggered:
-            print(f"__ALERT_JSON__:{json.dumps(alert_triggered)}")
+        if alert_triggered and self.producer:
+            print(f"⚠️ [FLINK REAL-TIME DETECTED]: {alert_triggered['alert_type']} na karcie {card_id}")
+            self.producer.send('alerts', value=alert_triggered)
+            self.producer.flush()
+            
             return json.dumps(alert_triggered)
         
         return None
