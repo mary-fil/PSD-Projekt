@@ -34,7 +34,7 @@ try:
         bootstrap_servers=KAFKA_BOOTSTRAP_SERVERS,
         value_serializer=lambda v: json.dumps(v).encode('utf-8')
     )
-    print("[+] Połączono z Kafką pomyślnie!")
+    print("[*] Połączono z Kafką pomyślnie!")
 except Exception as e:
     print(f"[-] Błąd połączenia z Kafką: {e}")
     exit(1)
@@ -48,7 +48,7 @@ if os.path.exists(HISTORICAL_FILE):
         hist_data = json.load(f)
     
     total_to_send = len(hist_data)
-    print(f"[*] Wstrzykiwanie {total_to_send} rekordów uczących do topiku '{KAFKA_TOPIC}'...")
+    print(f"[*] Wstrzykiwanie {total_to_send} historycznych transakcji do topiku '{KAFKA_TOPIC}'...")
     
     start_bulk = time.time()
     for idx, tx in enumerate(hist_data):
@@ -83,18 +83,18 @@ if os.path.exists(HISTORICAL_FILE):
             print(f" -> Wysłano {idx}/{total_to_send}...")
             
     producer.flush()
-    print(f"[+] Faza historyczna zakończona w {round(time.time() - start_bulk, 2)} sek.")
+    print(f"[*] Faza historyczna zakonczona w {round(time.time() - start_bulk, 2)} sek.")
     
     print("[*] Aktywacja pauzy buforowej (5 sekund) dla silnika Flink...")
     time.sleep(5)
 else:
-    print(f"[-] BŁĄD CRITICAL: Brak pliku '{HISTORICAL_FILE}'. Wygeneruj go najpierw!")
+    print(f"[-] CRITICAL ERROR: Brak pliku '{HISTORICAL_FILE}'. Wygeneruj go najpierw!")
     exit(1)
 
 cards_pool = list(cards_live_profiles.values())
 current_simulation_time = latest_historical_timestamp
 
-print(f"[+] Czas startowy symulacji na żywo: {current_simulation_time.isoformat()}")
+print(f"[*] Czas startowy symulacji na zywo: {current_simulation_time.isoformat()}")
 
 def generate_live_transaction(anomaly_type="NORMAL", specific_card=None):
     global current_simulation_time
@@ -117,13 +117,13 @@ def generate_live_transaction(anomaly_type="NORMAL", specific_card=None):
     if anomaly_type == "AMOUNT":
         amount = round(historical_mean * random.uniform(6.0, 10.0), 2)
         if amount < 550: amount += 600 
-        print(f"🚨 [PRODUCENT] Karta {card['card_id']} (Śr: {round(historical_mean, 2)}) -> Wstrzyknięto Skok Kwoty: {amount} PLN")
+        print(f"🚨 [PRODUCENT] Karta {card['card_id']} (Śr: {round(historical_mean, 2)}) -> Wstrzyknieto Skok Kwoty: {amount} PLN")
         
     elif anomaly_type == "LOCATION":
         lat = float(fake.latitude())
         lon = float(fake.longitude())
         tx_timestamp = card["last_tx_time"] + timedelta(minutes=1)
-        print(f"🚨 [PRODUCENT] Karta {card['card_id']} -> Wstrzyknięto Nagłą Lokalizację: [{lat}, {lon}]")
+        print(f"🚨 [PRODUCENT] Karta {card['card_id']} -> Wstrzyknięto Nagla Lokalizację: [{lat}, {lon}]")
 
     payload = {
         "card_id": card["card_id"],
