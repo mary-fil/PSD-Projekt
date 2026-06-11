@@ -1,11 +1,12 @@
 import os
 java_opts = "--add-opens=java.base/java.util=ALL-UNNAMED --add-opens=java.base/java.lang=ALL-UNNAMED --add-opens=java.base/java.util.concurrent.atomic=ALL-UNNAMED"
-os.environ["JVM_ARGS"] = java_opts
-os.environ["FLINK_ENV_JAVA_OPTS"] = java_opts
+os.environ["_JAVA_OPTIONS"] = java_opts
 
 import json
 import math
 import urllib.request
+import pathlib
+
 from datetime import datetime
 from kafka import KafkaProducer
 from pyflink.common import SimpleStringSchema
@@ -117,8 +118,8 @@ def run_flink_job():
     env.set_parallelism(1)
     env.set_python_executable("python3")
     
-    jar_path = os.path.abspath(JAR_NAME)
-    env.add_jars("file:" + jar_path)
+    jar_path = pathlib.Path(JAR_NAME).absolute()
+    env.add_jars(jar_path.as_uri())
 
     kafka_consumer = FlinkKafkaConsumer(
         topics='transactions',
