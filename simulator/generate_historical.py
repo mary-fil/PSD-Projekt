@@ -14,11 +14,11 @@ cards_pool = []
 
 for i in range(1, TOTAL_CARDS + 1):
     assigned_user = random.choice(users)
-    # Stały punkt życiowy użytkownika (polska w przybliżeniu)
+    # Stały punkt życiowy użytkownika (Polska w przybliżeniu)
     home_lat = random.uniform(49.0, 54.8)
     home_lon = random.uniform(14.1, 24.1)
     
-    # Indywidualny profil wydatków dla karty (np. student vs biznesmen)
+    # Indywidualny profil wydatków dla karty
     profile_type = random.choice(["SMALL", "MEDIUM", "LARGE"])
     if profile_type == "SMALL":
         base_amount_min, base_amount_max = 10.0, 80.0
@@ -36,13 +36,19 @@ for i in range(1, TOTAL_CARDS + 1):
     })
 
 historical_transactions = []
-# Zaczynamy generowanie wstecz czasowo (np. od wczoraj), żeby zachować ciągłość chronologiczną
-start_time = datetime.utcnow() - timedelta(days=2)
 
-print("[*] Budowanie stabilnych ciągów transakcji bez anomalii...")
+# Ustalamy globalny punkt startowy w przeszłości dla wszystkich kart (np. 15 dni wstecz)
+base_start_time = datetime.utcnow() - timedelta(days=15)
+
+# Słownik do pilnowania czasu niezależnie dla każdej karty
+# Zapobiega to nakładaniu się transakcji tej samej karty w krótkich odstępach czasu
+card_timers = {card["card_id"]: base_start_time for card in cards_pool}
+
+print("[*] Budowanie stabilnych ciągów transakcji (ochrona przed FREQUENCY_ANOMALY)...")
 for i in range(TOTAL_RECORDS):
     # Wybieramy losową kartę z puli
     card = random.choice(cards_pool)
+    card_id = card["card_id"]
     lat, lon = card["home_gps"]
     
     # Transakcja blisko domu (szum maksymalnie kilka kilometrów)
@@ -53,22 +59,28 @@ for i in range(TOTAL_RECORDS):
     min_amt, max_amt = card["amount_range"]
     amount = round(random.uniform(min_amt, max_amt), 2)
     
-    # Czas przesuwa się do przodu z każdą transakcją o losową liczbę sekund
-    start_time += timedelta(seconds=random.randint(1, 5))
+    # Dla wylosowanej karty przesuwamy jej czas o losowo od 30 do 180 minut.
+    card_timers[card_id] += timedelta(minutes=random.randint(30, 180))
+    tx_time = card_timers[card_id]
 
     payload = {
-        "card_id": card["card_id"],
+        "card_id": card_id,
         "user_id": card["user_id"],
         "gps": [round(lat, 6), round(lon, 6)],
         "amount": amount,
         "card_limit": card["limit"],
-        "timestamp": start_time.isoformat()
+        "timestamp": tx_time.isoformat()
     }
     historical_transactions.append(payload)
+
+# Sortujemy cały zbiór chronologicznie według znacznika czasu, 
+# aby Flink przetwarzał historię w idealnym porządku czasowym
+print("[*] Sortowanie chronologiczne zbioru danych...")
+historical_transactions.sort(key=lambda x: x["timestamp"])
 
 # Zapis do pliku JSON na dysku
 output_file = "historical_data.json"
 with open(output_file, "w") as f:
     json.dump(historical_transactions, f, indent=2)
 
-print(f"[+] Sukces! Wygenerowano plik {output_file} zawierający wzorcowe profile zachowań.")
+print(f"[+] Sukces! Wygenerowano plik {output_file}. Brak jakichkolwiek anomalii częstotliwości.")
