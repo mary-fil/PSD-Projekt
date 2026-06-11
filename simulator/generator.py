@@ -22,7 +22,7 @@ try:
         admin_client.delete_topics(topics=[KAFKA_TOPIC])
         time.sleep(2)
         
-    print(f"[*] Tworzenie świeżego, czystego topiku '{KAFKA_TOPIC}'...")
+    print(f"[*] Tworzenie nowego topiku '{KAFKA_TOPIC}'...")
     topic_list = [NewTopic(name=KAFKA_TOPIC, num_partitions=1, replication_factor=1)]
     admin_client.create_topics(new_topics=topic_list, validate_only=False)
     admin_client.close()
@@ -34,14 +34,12 @@ try:
         bootstrap_servers=KAFKA_BOOTSTRAP_SERVERS,
         value_serializer=lambda v: json.dumps(v).encode('utf-8')
     )
-    print("[+] Połączono z Kafką pomyślnie!")
+    print("[*] Połączono z Kafką")
 except Exception as e:
     print(f"[-] Błąd połączenia z Kafką: {e}")
     exit(1)
 
-# Słownik, w którym zapiszemy REALNE profile kart wyciągnięte z historii
 cards_live_profiles = {}
-# Zmienna do wyznaczenia punktu ciągłości osi czasu
 latest_historical_timestamp = None
 
 if os.path.exists(HISTORICAL_FILE):
@@ -56,7 +54,6 @@ if os.path.exists(HISTORICAL_FILE):
     for idx, tx in enumerate(hist_data):
         producer.send(KAFKA_TOPIC, value=tx)
         
-        # Ekstrakcja danych profilowych karty na podstawie historii
         cid = tx["card_id"]
         tx_time = datetime.fromisoformat(tx["timestamp"])
         
@@ -76,9 +73,8 @@ if os.path.exists(HISTORICAL_FILE):
             profile["tx_count"] += 1
             if tx_time > profile["last_tx_time"]:
                 profile["last_tx_time"] = tx_time
-                profile["home_gps"] = tx["gps"] # aktualna ostatnia lokalizacja
+                profile["home_gps"] = tx["gps"] 
 
-        # Śledzimy, kiedy dokładnie skończyła się historia globalnie
         if latest_historical_timestamp is None or tx_time > latest_historical_timestamp:
             latest_historical_timestamp = tx_time
 
@@ -87,21 +83,19 @@ if os.path.exists(HISTORICAL_FILE):
             print(f" -> Wysłano {idx}/{total_to_send}...")
             
     producer.flush()
-    print(f"[+] Faza historyczna zakończona w {round(time.time() - start_bulk, 2)} sek.")
+    print(f"[*] Faza historyczna zakończona w {round(time.time() - start_bulk, 2)} sek.")
     
     print("[*] Aktywacja pauzy buforowej (5 sekund) dla silnika Flink...")
     time.sleep(5)
 else:
-    print(f"[-] BŁĄD CRITICAL: Brak pliku '{HISTORICAL_FILE}'. Wygeneruj go najpierw!")
+    print(f"[-] CRITICAL ERROR: Brak pliku '{HISTORICAL_FILE}'.")
     exit(1)
 
-
-# Przekształcamy profil w listę do szybkiego losowania
 cards_pool = list(cards_live_profiles.values())
-# Zegar systemowy strumienia na żywo rusza DOKŁADNIE tam, gdzie skończyła się historia
+
 current_simulation_time = latest_historical_timestamp
 
-print(f"[+] Czas startowy symulacji na żywo: {current_simulation_time.isoformat()}")
+print(f"[*] Czas startowy symulacji na żywo: {current_simulation_time.isoformat()}")
 
 def generate_live_transaction(anomaly_type="NORMAL"):
     global current_simulation_time
@@ -109,26 +103,20 @@ def generate_live_transaction(anomaly_type="NORMAL"):
     card = random.choice(cards_pool)
     lat, lon = card["home_gps"]
     
-    # Wyliczamy prawdziwą średnią historyczną tej konkretnej karty
     historical_mean = card["sum_amount"] / card["tx_count"]
     
-    # Ruch na żywo posuwa zegar globalny o losowe ułamki sekund do przodu
     current_simulation_time += timedelta(seconds=random.randint(1, 3))
     
-    # Domyślne wartości (normalne)
     amount = round(random.uniform(historical_mean * 0.7, historical_mean * 1.3), 2)
     lat += random.uniform(-0.005, 0.005)
     lon += random.uniform(-0.005, 0.005)
     
     if anomaly_type == "AMOUNT":
-        # Mnożymy PRAWDZIWĄ średnią historyczną x6, co gwarantuje przebicie progu x4 we Flinku
         amount = round(historical_mean * random.uniform(6.0, 10.0), 2)
         if amount < 550: amount += 600 # Upewniamy się, że przekracza też próg twardy 500 PLN
         print(f"🚨 [PRODUCENT] Karta {card['card_id']} (Śr: {round(historical_mean, 2)}) -> Wstrzyknięto Skok Kwoty: {amount} PLN")
         
     elif anomaly_type == "LOCATION":
-        # Ponieważ symulacja czasu leci natychmiast po ostatniej transakcji historycznej danej karty,
-        # odległość kilku tysięcy kilometrów wykonana w kilka sekund wygeneruje prędkość rzędu milionów km/h!
         lat = float(fake.latitude())
         lon = float(fake.longitude())
         print(f"🚨 [PRODUCENT] Karta {card['card_id']} -> Wstrzyknięto Nagłą Lokalizację: [{lat}, {lon}]")
@@ -142,7 +130,6 @@ def generate_live_transaction(anomaly_type="NORMAL"):
         "timestamp": current_simulation_time.isoformat()
     }
     
-    # Jeśli transakcja była normalna, aktualizujemy wiedzę generatora, żeby dopasowywał się w locie
     if anomaly_type == "NORMAL":
         card["sum_amount"] += amount
         card["tx_count"] += 1
@@ -163,13 +150,11 @@ try:
             data, _ = generate_live_transaction(anomaly_type="LOCATION")
             producer.send(KAFKA_TOPIC, value=data)
         elif rand_val < 0.03:
-            # Częstotliwość generujemy wysyłając 4 paczki w ułamku sekundy symulacji
             data, card_id = generate_live_transaction(anomaly_type="NORMAL")
             print(f"🚨 [PRODUCENT] Wstrzykiwanie serii błyskawicznej dla karty {card_id}")
             producer.send(KAFKA_TOPIC, value=data)
             
             for _ in range(3):
-                # Generujemy transakcje o tym samym czasie lub przesunięte o ułamek sekundy
                 payload, _ = generate_live_transaction(anomaly_type="NORMAL")
                 payload["card_id"] = card_id
                 producer.send(KAFKA_TOPIC, value=payload)

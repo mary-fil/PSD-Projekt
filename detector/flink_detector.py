@@ -63,7 +63,6 @@ class FraudDetectorMap(MapFunction):
         
         alert_triggered = None
 
-        # Jeśli karta pojawiła się już w systemie, wyciągamy jej profil analityczny
         if card_id in self.cards_cache:
             card_profile = self.cards_cache[card_id]
             last_tx = card_profile["last_tx"]
@@ -76,7 +75,7 @@ class FraudDetectorMap(MapFunction):
             time_delta = (current_time - prev_time).total_seconds()
             time_delta_hours = time_delta / 3600.0
 
-            # 1. DETEKCJA ANOMALII LOKALIZACJI (Wzór Haversine)
+            # 1. DETEKCJA ANOMALII
             distance = haversine_distance(prev_gps, current_gps)
             if time_delta_hours > 0:
                 speed = distance / time_delta_hours
@@ -90,7 +89,7 @@ class FraudDetectorMap(MapFunction):
                         "execution_engine": "Apache Flink (Stateful)"
                     }
 
-            # 2. DETEKCJA KWOTY (Bazująca na przyrostowej średniej kroczącej użytkownika)
+            # 2. DETEKCJA KWOTY
             if current_amount > 500 and current_amount > (running_mean * 4):
                 alert_triggered = {
                     "alert_type": "AMOUNT_ANOMALY",
@@ -101,14 +100,11 @@ class FraudDetectorMap(MapFunction):
                     "execution_engine": "Apache Flink (Stateful)"
                 }
 
-            # 3. DETEKCJA ANOMALII CZĘSTOTLIWOŚCI (Z inteligentnym filtrem spamu seryjnego)
+            # 3. DETEKCJA ANOMALII CZĘSTOTLIWOŚCI 
             if 0 < time_delta < 5:
-                # Sprawdzamy, czy w ciągu ostatnich 10 sekund wysłaliśmy już alert dla tej serii
                 if last_freq_alert and (current_time - last_freq_alert).total_seconds() < 10:
-                    # To kolejna fala z tej samej trefnej serii - wyciszamy logi i narzut sieciowy
                     alert_triggered = {"alert_type": "FREQUENCY_ANOMALY_SILENT"}
                 else:
-                    # Pierwszy wykryty strzał z serii - generujemy pełny raport
                     alert_triggered = {
                         "alert_type": "FREQUENCY_ANOMALY",
                         "card_id": card_id,
@@ -117,16 +113,10 @@ class FraudDetectorMap(MapFunction):
                         "amount": current_amount,
                         "execution_engine": "Apache Flink (Stateful)"
                     }
-                    # Zapamiętujemy moment rzucenia alertu głównego w profilu karty
                     card_profile["last_freq_alert"] = current_time
 
-        # ======================================================================
-        # 🛡️ SYSTEM OCHRONY STANU PRZED ZATRUWANIEM (State Poisoning Protection)
-        # ======================================================================
         if alert_triggered is None:
-            # Transakcja jest prawidłowa -> bezpiecznie aktualizujemy bazowy profil stanowy karty
             if card_id not in self.cards_cache:
-                # Pierwsza transakcja w historii karty
                 self.cards_cache[card_id] = {
                     "last_tx": tx,
                     "welford_mean": current_amount,
@@ -134,17 +124,13 @@ class FraudDetectorMap(MapFunction):
                     "last_freq_alert": None
                 }
             else:
-                # Kolejna prawidłowa transakcja -> przeliczamy średnią matematycznie w locie
                 profile = self.cards_cache[card_id]
                 profile["tx_count"] += 1
                 profile["welford_mean"] += (current_amount - profile["welford_mean"]) / profile["tx_count"]
                 profile["last_tx"] = tx
         else:
-            # 🚨 Wykryto oszustwo! Całkowicie ODRZUCAMY tę transakcję z kesza.
-            # Dzięki temu kolejne ataki oszusta nadal mierzymy miarą legalnych zachowań klienta!
             pass
 
-        # Realna wysyłka alertu na topik Kafki (tylko dla unikalnych operacji, pomijając duplikaty)
         if alert_triggered and alert_triggered["alert_type"] != "FREQUENCY_ANOMALY_SILENT" and self.producer:
             print(f"⚠️ [FLINK REAL-TIME DETECTED]: {alert_triggered['alert_type']} na karcie {card_id}")
             self.producer.send('alerts', value=alert_triggered)
@@ -157,11 +143,6 @@ def run_flink_job():
     KAFKA_BOOTSTRAP_SERVERS = 'localhost:9092'
     ALERTS_TOPIC = 'alerts'
 
-    # ==============================================================================
-    # ⚙️ DYNAMICZNA KONFIGURACJA STRUMIENIA (Złoty as na obronie)
-    # ==============================================================================
-    # True  -> Tryb Earliest: Flink czyta od początku, ładuje plik JSON i buduje profile kart
-    # False -> Tryb Latest: Flink ignoruje historię i nasłuchuje czystego ruchu na żywo
     READ_FROM_EARLIEST = True
 
     try:
@@ -193,7 +174,6 @@ def run_flink_job():
         properties={'bootstrap.servers': KAFKA_BOOTSTRAP_SERVERS, 'group.id': 'flink_fraud_detector_group'}
     )
 
-    # Aplikowanie wybranego trybu offsetu danych
     if READ_FROM_EARLIEST:
         print("[*] Tryb: EARLIEST. Flink przetwarza historię i odbudowuje profile behawioralne.")
         kafka_consumer.set_start_from_earliest()
