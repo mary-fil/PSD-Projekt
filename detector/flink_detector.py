@@ -11,6 +11,8 @@ import json
 import math
 import time
 import urllib.request
+import pathlib
+
 from datetime import datetime
 from kafka import KafkaProducer, KafkaAdminClient
 from kafka.admin import NewTopic
@@ -155,8 +157,8 @@ def run_flink_job():
     env.set_parallelism(1)
     env.set_python_executable("python3")
     
-    jar_path = os.path.abspath(JAR_NAME)
-    env.add_jars("file:" + jar_path)
+    jar_path = pathlib.Path(JAR_NAME).absolute()
+    env.add_jars(jar_path.as_uri())
 
     kafka_consumer = FlinkKafkaConsumer(
         topics='transactions',
