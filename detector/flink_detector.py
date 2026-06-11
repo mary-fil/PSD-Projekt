@@ -5,9 +5,11 @@ os.environ["FLINK_ENV_JAVA_OPTS"] = java_opts
 
 import json
 import math
+import time
 import urllib.request
 from datetime import datetime
-from kafka import KafkaProducer
+from kafka import KafkaProducer, KafkaAdminClient
+from kafka.admin import NewTopic
 from pyflink.common import SimpleStringSchema
 from pyflink.datastream import StreamExecutionEnvironment
 from pyflink.datastream.connectors.kafka import FlinkKafkaConsumer
@@ -38,10 +40,6 @@ class FraudDetectorMap(MapFunction):
         self.producer = None
 
     def open(self, runtime_context):
-        """
-        Metoda cyklu życia Flinka. Wykonuje się RAZ na workerze w momencie startu zadania.
-        Tutaj bezpiecznie otwieramy połączenie z Kafką.
-        """
         self.producer = KafkaProducer(
             bootstrap_servers='localhost:9092',
             value_serializer=lambda v: json.dumps(v).encode('utf-8')
@@ -107,12 +105,34 @@ class FraudDetectorMap(MapFunction):
             print(f"⚠️ [FLINK REAL-TIME DETECTED]: {alert_triggered['alert_type']} na karcie {card_id}")
             self.producer.send('alerts', value=alert_triggered)
             self.producer.flush()
-            
             return json.dumps(alert_triggered)
         
         return None
 
 def run_flink_job():
+    KAFKA_BOOTSTRAP_SERVERS = 'localhost:9092'
+    ALERTS_TOPIC = 'alerts'
+
+    # ==============================================================================
+    # 🧹 AUTOMATYCZNE CZYSZCZENIE TOPIKU ALERTÓW PRZED STARTEM DETEKTORA
+    # ==============================================================================
+    try:
+        admin_client = KafkaAdminClient(bootstrap_servers=KAFKA_BOOTSTRAP_SERVERS, client_id='det_admin')
+        existing_topics = admin_client.list_topics()
+        
+        if ALERTS_TOPIC in existing_topics:
+            print(f"[*] Topik alertów '{ALERTS_TOPIC}' już istnieje. Czyszczenie przed startem...")
+            admin_client.delete_topics(topics=[ALERTS_TOPIC])
+            time.sleep(2)
+            
+        print(f"[*] Tworzenie świeżego topiku '{ALERTS_TOPIC}'...")
+        topic_list = [NewTopic(name=ALERTS_TOPIC, num_partitions=1, replication_factor=1)]
+        admin_client.create_topics(new_topics=topic_list, validate_only=False)
+        admin_client.close()
+    except Exception as e:
+        print(f"[-] Ostrzeżenie podczas czyszczenia topiku alertów: {e}")
+
+    # Konfiguracja środowiska Flink
     env = StreamExecutionEnvironment.get_execution_environment()
     env.set_parallelism(1)
     env.set_python_executable("python3")
@@ -120,12 +140,13 @@ def run_flink_job():
     jar_path = os.path.abspath(JAR_NAME)
     env.add_jars("file:" + jar_path)
 
+    # Konfiguracja konsumenta (Czytanie od samego początku!)
     kafka_consumer = FlinkKafkaConsumer(
         topics='transactions',
         deserialization_schema=SimpleStringSchema(),
-        properties={'bootstrap.servers': 'localhost:9092', 'group.id': 'flink_fraud_detector_group'}
+        properties={'bootstrap.servers': KAFKA_BOOTSTRAP_SERVERS, 'group.id': 'flink_fraud_detector_group'}
     )
-    kafka_consumer.set_start_from_latest()
+    kafka_consumer.set_start_from_earliest() # <-- KLUCZOWA ZMIANA DO OBSŁUGI HISTORII
     ds = env.add_source(kafka_consumer)
     
     alerts_ds = ds.map(FraudDetectorMap()).filter(lambda value: value is not None)
